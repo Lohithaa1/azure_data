@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azure-entra-microservice
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: azure-entra-microservice
+  template:
+    metadata:
+      labels:
+        app: azure-entra-microservice
+    spec:
+      containers:
+      - name: microservice
+        image: your-dockerhub-account/azure-entra-microservice:latest
+        env:
+        - name: AZURE_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: azure-secrets
+              key: access_token
+        - name: MYSQL_HOST
+          value: "mysql-service"
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secrets
+              key: username
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secrets
+              key: password
+        - name: MYSQL_DATABASE
+          value: "users_db"
+        ports:
+        - containerPort: 80
