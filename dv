@@ -1,0 +1,174 @@
+import logging
+from services.db_client import db_client  # Use the existing DB client for queries
+
+logger = logging.getLogger(__name__)
+
+class DBOperations:
+    """Handles all database insert and fetch operations for IAM service."""
+
+    async def get_service_id(self, service_name: str):
+        """🔍 Fetch service ID by name."""
+        try:
+            query = "SELECT service_id FROM mst_services WHERE name = %s"
+            result = await db_client.execute_query(query, (service_name,), fetch_one=True)
+            return result["service_id"] if result else None
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch service ID: {e}")
+            return None
+
+    async def insert_service(self, service_name: str):
+        """🛠️ Insert a new service and return its ID."""
+        try:
+            service_id = await self.generate_uid()
+            query = """
+                INSERT INTO mst_services (service_id, name, created_by, updated_by) 
+                VALUES (%s, %s, %s, %s)
+            """
+            await db_client.execute_query(query, (service_id, service_name, "1", "1"))
+            logger.info(f"✅ Service '{service_name}' inserted successfully.")
+            return service_id
+        except Exception as e:
+            logger.error(f"❌ Failed to insert service '{service_name}': {e}")
+            return None
+
+    async def get_resource_type_id_by_name(self, resource_name: str):
+        """🔍 Fetch resource type ID by name."""
+        try:
+            query = "SELECT resource_type_id FROM mst_resource_types WHERE name = %s"
+            result = await db_client.execute_query(query, (resource_name,), fetch_one=True)
+            return result["resource_type_id"] if result else None
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch resource type ID: {e}")
+            return None
+
+    async def insert_resource_type(self, resource_id: str, resource_name: str, service_id: str, parent_resource_id: str = None):
+        """🛠️ Insert a resource type into the database."""
+        try:
+            query = """
+                INSERT INTO mst_resource_types (resource_type_id, name, service_id, parent_resource_type_id, created_by, updated_by) 
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            await db_client.execute_query(query, (resource_id, resource_name, service_id, parent_resource_id, "1", "1"))
+            logger.info(f"✅ Resource Type '{resource_name}' inserted successfully.")
+        except Exception as e:
+            logger.error(f"❌ Failed to insert resource type '{resource_name}': {e}")
+
+    async def insert_role(self, role_name: str, resource_type_id: str):
+        """🛠️ Insert a role and return its ID."""
+        try:
+            role_id = await self.generate_uid()
+            query = """
+                INSERT INTO mst_roles (role_id, name, scope_resource_type_id, created_by, updated_by) 
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            await db_client.execute_query(query, (role_id, role_name, resource_type_id, "1", "1"))
+            logger.info(f"✅ Role '{role_name}' inserted successfully.")
+            return role_id
+        except Exception as e:
+            logger.error(f"❌ Failed to insert role '{role_name}': {e}")
+            return None
+
+    async def insert_permission(self, permission_name: str, resource_type_id: str):
+        """🛠️ Insert a permission and return its ID."""
+        try:
+            permission_id = await self.generate_uid()
+            query = """
+                INSERT INTO mst_permissions (permission_id, name, resource_type_id, created_by, updated_by) 
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            await db_client.execute_query(query, (permission_id, permission_name, resource_type_id, "1", "1"))
+            logger.info(f"✅ Permission '{permission_name}' inserted successfully.")
+            return permission_id
+        except Exception as e:
+            logger.error(f"❌ Failed to insert permission '{permission_name}': {e}")
+            return None
+
+    async def insert_role_permission(self, role_id: str, permission_id: str):
+        """🛠️ Insert role-permission mapping."""
+        try:
+            role_permission_id = await self.generate_uid()
+            query = """
+                INSERT INTO mst_role_permissions (role_permission_id, role_id, permission_id, created_by, updated_by) 
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            await db_client.execute_query(query, (role_permission_id, role_id, permission_id, "1", "1"))
+            logger.info(f"✅ Role-Permission mapping inserted successfully.")
+        except Exception as e:
+            logger.error(f"❌ Failed to insert role-permission mapping: {e}")
+
+    async def generate_uid(self):
+        """🔑 Generate a unique ID (UUID) for primary keys."""
+        import uuid
+        return str(uuid.uuid4())
+
+# Create a global instance
+db_operations = DBOperations()
+
+
+import os
+import json
+import logging
+import asyncio
+from services.json_handler import JSONHandler
+from services.resource_manager import ResourceManager
+from services.resource_type_id import ResourceClient
+from services.db_operations import db_operations  # ✅ Import DB Operations
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def main():
+    """Main function to process IAM resource creation."""
+    try:
+        resource_manager = ResourceManager()
+        json_handler = JSONHandler()
+        resourceid_client = ResourceClient()
+
+        file_path = os.getenv("TEMPLATE_FILE")
+        logger.info(f"📂 TEMPLATE_FILE path: {file_path}")
+
+        # ✅ Load the resource template
+        with open(file_path, "r") as f:
+            resource_data = json.load(f)
+        logger.info("✅ Resource template loaded successfully.")
+
+        # ✅ Extract & fetch Service ID
+        service_name = resource_data.get("service_name")
+        service_id = await db_operations.get_service_id(service_name)
+        if not service_id:
+            service_id = await db_operations.insert_service(service_name)
+        
+        # ✅ Generate Resource ID
+        resource_id = await resourceid_client.get_resource_id()
+        resource_data["key"] = resource_id
+
+        # ✅ Create Resource in Permit.io
+        resource_created = await resource_manager.create_resource_with_roles_relations(resource_id, resource_data)
+        if not resource_created:
+            raise ValueError(f"❌ Failed to create resource in Permit.io for {resource_id}")
+
+        logger.info(f"✅ Resource '{resource_created['name']}' created successfully in Permit.io.")
+
+        # ✅ Insert Resource Type in MySQL
+        parent_resource_name = resource_data.get("relations", {}).get("parent", {}).get("subject_resource")
+        parent_resource_id = await db_operations.get_resource_type_id_by_name(parent_resource_name) if parent_resource_name else None
+        await db_operations.insert_resource_type(resource_id, resource_data["name"], service_id, parent_resource_id)
+
+        # ✅ Insert Roles & Permissions into MySQL
+        for role_key, role_details in resource_data.get("roles", {}).items():
+            role_id = await db_operations.insert_role(role_details["name"], resource_id)
+
+            for permission in role_details.get("permissions", []):
+                permission_id = await db_operations.insert_permission(permission, resource_id)
+                await db_operations.insert_role_permission(role_id, permission_id)
+
+        logger.info(f"✅ Resource Type, Roles, and Permissions stored in MySQL for {resource_id}")
+
+    except Exception as e:
+        logger.error(f"❌ Error during the resource creation process: {e}")
+        raise
+
+    logger.info("🎯 Resource creation and processing completed successfully.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
